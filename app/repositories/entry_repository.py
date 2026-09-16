@@ -44,11 +44,16 @@ class EntryRepository:
         return result.scalar_one_or_none()
 
     async def get_by_type_and_keys(
-        self, type_id: int, keys: list[str], service_name: str | None = None
+        self,
+        type_id: int,
+        keys: list[str],
+        service_name: str | None = None,
+        owner_user_id: int | None = None,
     ) -> list[MetadataEntry]:
         """根据 type_id + entity_key 列表批量获取实体（含软删除过滤）。
 
         用于批量查询（batch get）：一次取回多个 key 对应的实体。
+        service_name / owner_user_id 由上层 MetaScope 解析后传入。
         """
         stmt = select(MetadataEntry).where(
             MetadataEntry.type_id == type_id,
@@ -57,6 +62,8 @@ class EntryRepository:
         )
         if service_name:
             stmt = stmt.where(MetadataEntry.service_name == service_name)
+        if owner_user_id is not None:
+            stmt = stmt.where(MetadataEntry.owner_user_id == owner_user_id)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

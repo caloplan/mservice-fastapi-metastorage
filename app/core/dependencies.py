@@ -3,8 +3,9 @@
 本服务不存储用户表，get_current_user 返回轻量的 CurrentUser 对象（仅含 JWT payload 字段）。
 
 权限模型：所有 Meta 操作（list / get / create / update / delete）统一经过 MetaScope 判定。
-- GLOBAL scope（superuser）：可操作任意 service；
-- SERVICE scope（普通 service 身份）：仅可操作自身 service。
+- GLOBAL scope（superuser）：可操作任意 service、任意 owner；
+- SERVICE scope（普通 service 身份）：仅可操作自身 service 且自身 owner 的 entry；
+  类型（types）接口保持 service 级共享，不引入 owner 隔离。
 """
 
 from enum import Enum
@@ -100,8 +101,9 @@ class MetaScope:
     """统一权限 Scope：所有 Meta 操作（list / get / create / update / delete）共用的判定入口。
 
     规则：
-    - GLOBAL scope（superuser）：可访问/操作任意 service；
-    - SERVICE scope（普通身份）：仅可访问/操作自身 service，显式跨 service 一律 403。
+    - GLOBAL scope（superuser）：可访问/操作任意 service、任意 owner；
+    - SERVICE scope（普通身份）：仅可访问/操作自身 service 且自身 owner 的 entry，
+      显式跨 service 或跨 owner 一律 403（单实体）/ 不可见（列表/批量）。
     """
 
     def __init__(self, user: CurrentUser, is_superuser: bool) -> None:
@@ -113,6 +115,11 @@ class MetaScope:
     def service_name(self) -> str:
         """当前身份所属 service。"""
         return self.user.service_name
+
+    @property
+    def owner_user_id(self) -> int:
+        """当前登录用户 ID（SERVICE scope 下 entry 的 owner 隔离维度）。"""
+        return self.user.user_id
 
     def require_global(self, *, action: str) -> None:
         """管理类操作（如类型 create/update/delete）：仅 GLOBAL scope 允许。"""
@@ -142,6 +149,8 @@ class MetaScope:
 
         - GLOBAL：未指定 → None（全部服务）；指定 → 按指定过滤；
         - SERVICE：强制返回自身 service；显式指定其他服务 → 403。
+
+        owner 维度见 resolve_owner_filter()。
         """
         if self.scope == Scope.GLOBAL:
             return requested
@@ -152,16 +161,30 @@ class MetaScope:
             )
         return self.service_name
 
+    def resolve_owner_filter(self) -> int | None:
+        """解析列表/批量查询操作的 owner 过滤条件；返回 None 表示不限 owner。
+
+        - GLOBAL（superuser）：None，可跨 owner 查看；
+        - SERVICE：强制返回当前 user_id，仅可见自身 owner 的 entry。
+        """
+        if self.scope == Scope.GLOBAL:
+            return None
+        return self.owner_user_id
+
     def check_entry_access(self, entry: Any, *, action: str) -> None:
-        """校验单实体访问：GLOBAL 放行；SERVICE 仅允许自身 service，越权 403。"""
+        """校验单实体访问：GLOBAL 放行；SERVICE 仅允许自身 service 且 owner 一致，越权 403。"""
         if self.scope == Scope.GLOBAL:
             return
-        if entry.service_name == self.service_name:
-            return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="无权访问此元数据",
-        )
+        if entry.service_name != self.service_name:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权访问此元数据",
+            )
+        if getattr(entry, "owner_user_id", None) != self.owner_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权访问此元数据",
+            )
 
 
 async def get_meta_scope(

@@ -196,15 +196,24 @@ JWKS 缓存带 TTL（`JWKS_CACHE_TTL_SECONDS`，默认 3600 秒）。
 
 | Scope | 身份 | 可操作范围 |
 |-------|------|-----------|
-| `global` | superuser（role + 用户名 + user_id 三重校验通过） | **任意 service**：跨服务创建/查询/访问均可 |
-| `service` | 普通 service 身份 | **仅自身 service**：显式跨 service 一律 **403** |
+| `global` | superuser（role + 用户名 + user_id 三重校验通过） | **任意 service、任意 owner**：跨服务/跨用户创建/查询/访问均可 |
+| `service` | 普通 service 身份 | **仅自身 service 且自身 owner 的 entry**：显式跨 service 一律 **403**；同 service 跨 owner 单实体 **403**、列表/批量查询不可见 |
 
 判定入口（`MetaScope` 方法）：
 
 - `require_global(action)`：管理操作（类型 create/update/delete），仅 `global` 允许，否则 403；
 - `resolve_target(requested, action)`：单实体 / 创建操作的目标 service——未指定默认自身，显式跨 service 仅 `global` 允许；
 - `resolve_filter(requested, action)`：列表 / 查询的 service 过滤——普通身份强制自身 service，`global` 可全量或按指定；
-- `check_entry_access(entry, action)`：单实体访问——`global` 放行，普通身份仅自身 service。
+- `resolve_owner_filter()`：列表 / 批量查询的 owner 过滤——`global` 返回 `None`（不限 owner），普通身份强制返回当前 `user_id`（仅可见自身 owner 的 entry）；
+- `check_entry_access(entry, action)`：单实体访问——`global` 放行；普通身份需同时满足 `service_name` 一致 **且** `owner_user_id` 一致，否则 **403**。
+
+**实体（entries）owner 级隔离规则：**
+
+- 普通身份（`service` scope）对 entry 的所有读取/修改/删除/版本/回滚/批量/列表查询，数据必须同时满足 `owner_user_id == 当前登录用户 user_id` 且 `service_name == 当前身份所属 service`；
+- 单实体越权访问（跨 owner 或跨 service）→ **403**；列表/批量查询中越权数据不可见（返回空 / `null`，不泄露存在性）；
+- superuser（`global` scope）不受 owner 限制，保持跨 service、跨用户能力；
+- 创建时 `owner_user_id` 始终为当前创建者（从 JWT `user_id` 提取）；
+- **类型（types）接口保持 service 级共享**，不引入 owner 隔离——类型是 service 共享的 schema 定义，普通用户可读本 service 的类型。
 
 写入时从 JWT 提取 `user_id` 与 `service_name` 作为归属；superuser 可通过创建请求体或查询参数 `service_name` 指定其他 service。
 
@@ -257,7 +266,7 @@ JWKS 缓存带 TTL（`JWKS_CACHE_TTL_SECONDS`，默认 3600 秒）。
 - 创建时间范围（`created_after` / `created_before`）；
 - 分页返回 `{"total": ..., "items": [...]}`；
 - 排序（`sort_by` + `sort_order`）；
-- 仅返回当前用户可见数据。
+- 仅返回当前用户可见数据（service + owner 双重隔离）。
 
 ### 日志脱敏
 
@@ -326,7 +335,8 @@ pytest tests/ -v
 - 元数据 CRUD、schema 校验 422（缺必填字段、类型错误）
 - 版本自增、历史版本读取、版本历史列表、回滚
 - tags 过滤查询、字段过滤查询、分页
-- 越权 403（非同 service 且非 owner）、同 service 可访问
+- 越权 403（跨 service / 同 service 跨 owner）、owner 级隔离（列表/批量不泄露存在性）
+- superuser 跨 service / 跨 owner 访问
 - superuser 权限（普通 token 写 /types 403、superuser token 可管理）
 - 无 token / 伪造 token 拒绝（401）
 - 重复创建冲突（409）、有实体数据的类型禁止删除（409）
@@ -449,6 +459,6 @@ curl -X POST http://localhost:9093/api/v1/entries/batch \
 # 返回 {"post-1001": {...obj...}, "post-1002": {...obj...}, "post-9999": null}
 ```
 
-- 未找到 / 已软删 / 无权限访问的 key 返回 `null`（不报错）；
+- 未找到 / 已软删 / 无权限访问（跨 service 或跨 owner）的 key 返回 `null`（不报错）；
 - `keys` 数量上限 `MAX_BATCH_KEYS`（默认 200），超限返回 422；
-- 统一 Scope：普通身份仅查自身 service，superuser 可在请求体指定 `service_name` 跨服务查询。
+- 统一 Scope：普通身份仅查自身 service 且自身 owner 的 entry，superuser 可在请求体指定 `service_name` 跨服务查询（不受 owner 限制）。

@@ -45,8 +45,8 @@ class EntryService:
     """元数据实体业务逻辑层。
 
     所有操作（list / get / create / update / delete / versions / rollback）统一经 MetaScope 做权限判定：
-    - GLOBAL scope（superuser）：可操作任意 service；
-    - SERVICE scope（普通身份）：仅可操作自身 service。
+    - GLOBAL scope（superuser）：可操作任意 service、任意 owner；
+    - SERVICE scope（普通身份）：仅可操作自身 service 且自身 owner 的 entry。
     """
 
     def __init__(self, db: AsyncSession) -> None:
@@ -151,7 +151,10 @@ class EntryService:
             batch_data.type_name, target_service
         )
         return await self.repo.get_by_type_and_keys(
-            metadata_type.id, unique_keys, service_name=target_service
+            metadata_type.id,
+            unique_keys,
+            service_name=target_service,
+            owner_user_id=scope.resolve_owner_filter(),
         )
 
     async def update_entry(
@@ -223,14 +226,15 @@ class EntryService:
     ) -> tuple[list[MetadataEntry], int]:
         """复杂查询：字段过滤 + tags 交集 + 时间范围 + 分页 + 排序 + 统一 Scope 隔离。
 
-        可见性规则（resolve_filter）：
-        - GLOBAL：未指定 service_name → 全部；指定 → 按指定过滤；
-        - SERVICE：强制仅返回自身 service 的数据，显式跨 service → 403。
+        可见性规则（resolve_filter + resolve_owner_filter）：
+        - GLOBAL：未指定 service_name → 全部；指定 → 按指定过滤；owner 不限；
+        - SERVICE：强制仅返回自身 service 且自身 owner 的数据，显式跨 service → 403。
         """
         target_service = scope.resolve_filter(service_name, action="查看元数据")
         return await self.repo.query_entries(
             type_name=type_name,
             service_name=target_service,
+            owner_user_id=scope.resolve_owner_filter(),
             field_filters=field_filters,
             tags=tags,
             created_after=created_after,

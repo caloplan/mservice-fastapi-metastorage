@@ -447,10 +447,10 @@ async def test_entry_visibility_other_user_forbidden(client):
 
 
 @pytest.mark.asyncio
-async def test_entry_visibility_same_service_allowed(client):
-    """测试同 service_name 的用户可访问彼此的实体。"""
+async def test_entry_visibility_same_service_other_owner_forbidden(client):
+    """测试同 service 但不同 owner 的用户访问返回 403（owner 级隔离）。"""
     await _create_type(client)
-    # alice (forum) 创建实体
+    # alice (forum, user_id=1) 创建实体
     await client.post(
         "/api/v1/entries",
         headers=_user_headers(user_id=1, username="alice", service_name="forum"),
@@ -461,12 +461,12 @@ async def test_entry_visibility_same_service_allowed(client):
             "tags": [],
         },
     )
-    # charlie (forum) 可以访问
+    # charlie (forum, user_id=3) 同 service 但非 owner，访问返回 403
     response = await client.get(
         "/api/v1/entries/forum_post/post-001",
         headers=_user_headers(user_id=3, username="charlie", service_name="forum"),
     )
-    assert response.status_code == 200
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -945,3 +945,214 @@ async def test_batch_get_soft_deleted_key_null(client):
     )
     assert response.status_code == 200
     assert response.json()["post-a"] is None
+
+
+# ── owner 级用户隔离（同 service 跨 owner）───────────────────
+
+
+def _alice_headers():
+    """alice: forum 服务, user_id=1。"""
+    return _user_headers(user_id=1, username="alice", service_name="forum")
+
+
+def _bob_headers():
+    """bob: 同 forum 服务, user_id=2（与 alice 同 service 但不同 owner）。"""
+    return _user_headers(user_id=2, username="bob", service_name="forum")
+
+
+async def _create_two_users_entries(client):
+    """alice 与 bob（同 forum 服务）各创建一条实体。"""
+    await _create_type(client)  # forum_post / forum
+    await client.post(
+        "/api/v1/entries",
+        headers=_alice_headers(),
+        json={"type_name": "forum_post", "entity_key": "post-alice", "data": {"title": "alice的帖", "board": "技术"}, "tags": []},
+    )
+    await client.post(
+        "/api/v1/entries",
+        headers=_bob_headers(),
+        json={"type_name": "forum_post", "entity_key": "post-bob", "data": {"title": "bob的帖", "board": "技术"}, "tags": []},
+    )
+
+
+@pytest.mark.asyncio
+async def test_owner_isolation_get_cross_owner_403(client):
+    """同 service 下用户 A 无法读取用户 B 创建的实体（单实体 GET → 403）。"""
+    await _create_two_users_entries(client)
+    # bob 尝试读 alice 的实体
+    resp = await client.get(
+        "/api/v1/entries/forum_post/post-alice", headers=_bob_headers()
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_isolation_update_cross_owner_403(client):
+    """同 service 下用户 A 无法修改用户 B 创建的实体（PUT → 403）。"""
+    await _create_two_users_entries(client)
+    resp = await client.put(
+        "/api/v1/entries/forum_post/post-alice",
+        headers=_bob_headers(),
+        json={"data": {"title": "被篡改"}},
+    )
+    assert resp.status_code == 403
+    # 确认 alice 的数据未被篡改
+    check = await client.get(
+        "/api/v1/entries/forum_post/post-alice", headers=_alice_headers()
+    )
+    assert check.json()["data"]["title"] == "alice的帖"
+
+
+@pytest.mark.asyncio
+async def test_owner_isolation_delete_cross_owner_403(client):
+    """同 service 下用户 A 无法删除用户 B 创建的实体（DELETE → 403）。"""
+    await _create_two_users_entries(client)
+    resp = await client.delete(
+        "/api/v1/entries/forum_post/post-alice", headers=_bob_headers()
+    )
+    assert resp.status_code == 403
+    # 确认 alice 的实体仍在
+    check = await client.get(
+        "/api/v1/entries/forum_post/post-alice", headers=_alice_headers()
+    )
+    assert check.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_owner_isolation_versions_cross_owner_403(client):
+    """同 service 下用户 A 无法查看用户 B 实体的版本历史（versions → 403）。"""
+    await _create_two_users_entries(client)
+    resp = await client.get(
+        "/api/v1/entries/forum_post/post-alice/versions", headers=_bob_headers()
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_isolation_rollback_cross_owner_403(client):
+    """同 service 下用户 A 无法回滚用户 B 的实体（rollback → 403）。"""
+    await _create_two_users_entries(client)
+    resp = await client.post(
+        "/api/v1/entries/forum_post/post-alice/rollback",
+        headers=_bob_headers(),
+        json={"version": 1},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_isolation_query_list_hides_other_owner(client):
+    """同 service 下列表查询仅返回自身 owner 的实体，不泄露他人存在性。"""
+    await _create_two_users_entries(client)
+    # bob 查询：只能看到自己的 post-bob，看不到 post-alice
+    resp = await client.get(
+        "/api/v1/entries?type_name=forum_post", headers=_bob_headers()
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["entity_key"] == "post-bob"
+    # alice 查询：只能看到自己的 post-alice
+    resp = await client.get(
+        "/api/v1/entries?type_name=forum_post", headers=_alice_headers()
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["entity_key"] == "post-alice"
+
+
+@pytest.mark.asyncio
+async def test_owner_isolation_batch_get_hides_other_owner(client):
+    """同 service 下批量查询中他人 owner 的 key 返回 null（不泄露存在性）。"""
+    await _create_two_users_entries(client)
+    # bob 批量查 alice 的 key 与自己的 key
+    resp = await client.post(
+        "/api/v1/entries/batch",
+        headers=_bob_headers(),
+        json={"type_name": "forum_post", "keys": ["post-alice", "post-bob"]},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["post-bob"]["entity_key"] == "post-bob"
+    assert data["post-alice"] is None  # 不泄露 alice 实体的存在性
+
+
+@pytest.mark.asyncio
+async def test_owner_isolation_owner_can_access_own_entry(client):
+    """owner 本人可正常读/改/删/查自己的实体。"""
+    await _create_two_users_entries(client)
+    # 读
+    resp = await client.get("/api/v1/entries/forum_post/post-alice", headers=_alice_headers())
+    assert resp.status_code == 200
+    # 改
+    resp = await client.put(
+        "/api/v1/entries/forum_post/post-alice",
+        headers=_alice_headers(),
+        json={"data": {"title": "alice改了"}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["title"] == "alice改了"
+    # 删
+    resp = await client.delete("/api/v1/entries/forum_post/post-alice", headers=_alice_headers())
+    assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_superuser_cross_owner_get_ok(client):
+    """superuser（GLOBAL）不受 owner 限制，可跨 owner 读取。"""
+    await _create_two_users_entries(client)
+    # superuser 可读取 alice 的实体（跨 owner）
+    resp = await client.get(
+        "/api/v1/entries/forum_post/post-alice", headers=_superuser_headers_for("default")
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["title"] == "alice的帖"
+    # superuser 可读取 bob 的实体（跨 owner）
+    resp = await client.get(
+        "/api/v1/entries/forum_post/post-bob", headers=_superuser_headers_for("default")
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["title"] == "bob的帖"
+
+
+@pytest.mark.asyncio
+async def test_superuser_cross_owner_update_ok(client):
+    """superuser 不受 owner 限制，可跨 owner 修改。"""
+    await _create_two_users_entries(client)
+    resp = await client.put(
+        "/api/v1/entries/forum_post/post-alice",
+        headers=_superuser_headers_for("default"),
+        json={"data": {"title": "super改了"}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["title"] == "super改了"
+
+
+@pytest.mark.asyncio
+async def test_superuser_query_sees_all_owners(client):
+    """superuser 查询返回所有 owner 的实体（不按 owner 过滤）。"""
+    await _create_two_users_entries(client)
+    resp = await client.get(
+        "/api/v1/entries?type_name=forum_post", headers=_superuser_headers_for("default")
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    keys = {item["entity_key"] for item in data["items"]}
+    assert keys == {"post-alice", "post-bob"}
+
+
+@pytest.mark.asyncio
+async def test_superuser_batch_get_cross_owner(client):
+    """superuser 批量查询可跨 owner 返回实体。"""
+    await _create_two_users_entries(client)
+    resp = await client.post(
+        "/api/v1/entries/batch",
+        headers=_superuser_headers_for("default"),
+        json={"type_name": "forum_post", "keys": ["post-alice", "post-bob"], "service_name": "forum"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["post-alice"]["entity_key"] == "post-alice"
+    assert data["post-bob"]["entity_key"] == "post-bob"
