@@ -3,6 +3,7 @@
 > 服务端口：**9093** ｜ 技术栈与工程规范严格对齐 `mservice-fastapi-user`（user-service）
 
 本服务**不存储文件/对象二进制本体**，只存储**结构化元数据**：业务方（forum / shop / game 等，对齐 user-service 的 `service_name` 维度）登记一种"元数据类型"（Metadata Type），然后对该类型下的实体写入/查询描述性元数据（JSON、标签、版本）。目标是可复用的通用元数据存储底座，供多个业务微服务共享。
+
 ## 相关项目（CaloPlan 全家桶）
 
 CaloPlan 全栈项目统一托管在 GitHub Organization [caloplan](https://github.com/caloplan)：
