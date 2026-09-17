@@ -3,6 +3,23 @@
 > 服务端口：**9093** ｜ 技术栈与工程规范严格对齐 `mservice-fastapi-user`（user-service）
 
 本服务**不存储文件/对象二进制本体**，只存储**结构化元数据**：业务方（forum / shop / game 等，对齐 user-service 的 `service_name` 维度）登记一种"元数据类型"（Metadata Type），然后对该类型下的实体写入/查询描述性元数据（JSON、标签、版本）。目标是可复用的通用元数据存储底座，供多个业务微服务共享。
+## 相关项目（CaloPlan 全家桶）
+
+CaloPlan 全栈项目统一托管在 GitHub Organization [caloplan](https://github.com/caloplan)：
+
+| 类型 | 项目 | 与本项目关系 |
+| --- | --- | --- |
+| 前端 | [coloplan-v2](https://github.com/caloplan/coloplan-v2) | 客户端（数据经 SDK 落库到本服务） |
+| SDK | [caloplan-core](https://github.com/caloplan/caloplan-core) | meal / food 仓储（本服务为落库对端） |
+| SDK | [caloplan-user](https://github.com/caloplan/caloplan-user) | 身体指标 / 营养目标（本服务为存储后端） |
+| SDK | [caloplan-chat](https://github.com/caloplan/caloplan-chat) | AI 对话 SDK（审批后经本服务写数据） |
+| SDK | [caloplan-cache](https://github.com/caloplan/caloplan-cache) | 通用缓存（兄弟模块） |
+| 服务 | [fastapi-chat-service](https://github.com/caloplan/fastapi-chat-service) | AI 对话微服务（AI 工具写本服务数据域） |
+| 服务 | [fastapi-file-service](https://github.com/caloplan/fastapi-file-service) | 图片上传微服务（兄弟服务） |
+| 服务 | [mservice-fastapi-user](https://github.com/caloplan/mservice-fastapi-user) | 认证 / 用户微服务（JWT 签发方） |
+| 服务（本仓库） | [mservice-fastapi-metastorage](https://github.com/caloplan/mservice-fastapi-metastorage) | 元数据存储微服务 |
+
+本服务消费 `mservice-fastapi-user` 签发的 JWT，是 CaloPlan 数据域（food / meal / body / nutrition）的统一存储底座，被 `caloplan-core`、`caloplan-user` 与 `fastapi-chat-service` 共同消费。
 
 ## 技术栈
 
