@@ -151,7 +151,8 @@ def validate_data_against_schema(schema_json: dict, data: dict) -> dict:
     model_cls = build_dynamic_model(schema_json)
     try:
         validated = model_cls.model_validate(data)
-        return validated.model_dump(exclude_none=False)
+        # exclude_none=True：None 视为字段不存在，不存储（配合 update 的 null 删除语义）
+        return validated.model_dump(exclude_none=True)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

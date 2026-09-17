@@ -16,9 +16,12 @@ from app.services.type_service import TypeService, validate_data_against_schema
 
 
 def _deep_merge(base: dict, update: dict) -> dict:
-    """深度合并两个字典：update 中的值覆盖 base，嵌套字典递归合并。"""
+    """深度合并两个字典：update 中的值覆盖 base，嵌套字典递归合并；值为 None 表示删除该字段。"""
     result = base.copy()
     for key, value in update.items():
+        if value is None:
+            result.pop(key, None)
+            continue
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)
         else:

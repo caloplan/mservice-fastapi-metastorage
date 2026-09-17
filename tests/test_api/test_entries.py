@@ -199,6 +199,34 @@ async def test_update_entry_version_increment(client):
 
 
 @pytest.mark.asyncio
+async def test_update_entry_null_deletes_field(client):
+    """update 中值为 null 的字段表示删除（deep merge 支持嵌套字段删除）。"""
+    await _create_type(client)
+    await client.post(
+        "/api/v1/entries",
+        headers=_user_headers(),
+        json={
+            "type_name": "forum_post",
+            "entity_key": "post-002",
+            "data": {"title": "标题", "board": "技术", "likes": 10, "is_pinned": True},
+            "tags": [],
+        },
+    )
+    response = await client.put(
+        "/api/v1/entries/forum_post/post-002",
+        headers=_user_headers(),
+        json={"data": {"likes": None}},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    # likes 被删除，其余字段保留
+    assert "likes" not in data["data"]
+    assert data["data"]["title"] == "标题"
+    assert data["data"]["board"] == "技术"
+    assert data["data"]["is_pinned"] is True
+
+
+@pytest.mark.asyncio
 async def test_get_entry_historical_version(client):
     """测试获取历史版本数据。"""
     await _create_type(client)
